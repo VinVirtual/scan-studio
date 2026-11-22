@@ -46,7 +46,7 @@ scan-studio evaluate jug-out --truth ground_truth.ply --cameras cameras_gt.json 
 | height | 198.9 mm (true 199.5 mm; the height was given as 199.5 mm and simplifying moved the top) |
 | camera centres after alignment | 6.9 mm mean error |
 
-Alignment uses only the cameras (rotation and translation, no rescaling), then rigid ICP. Before ICP the mean distance is 2.26 mm. Repeated runs vary a little because structure from motion is multithreaded: two runs with exactly these settings gave 1.83 and 1.87 mm. The model is 1.5 cm longer than the real jug (21.6 cm against 20.1 cm, spout to handle) because a thin fin of stereo error at the rim survives cleaning.
+Alignment uses only the cameras (rotation and translation, no rescaling), then rigid ICP. Before ICP the mean distance is 2.26 mm. Repeated runs vary a little because structure from motion is multithreaded: three runs with exactly these settings (one from a fresh clone) gave 1.71, 1.83 and 1.87 mm, and took 76 to 97 seconds. The model is 1.5 cm longer than the real jug (21.6 cm against 20.1 cm, spout to handle) because a thin fin of stereo error at the rim survives cleaning.
 
 Committed outputs: [`jug-out/jug.glb`](examples/jug/jug-out/jug.glb), [`jug-out/report.html`](examples/jug/jug-out/report.html), [`jug-out/report.json`](examples/jug/jug-out/report.json). The USDZ pair in `jug-out/ar/` is not committed (6.9 MB); `run.sh` makes it in under two seconds once ar-models is installed.
 
