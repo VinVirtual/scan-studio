@@ -1,0 +1,8 @@
+{
+  "name": "scan-studio-viewer",
+  "private": true,
+  "description": "Builds scan_studio/viewer/viewer.bundle.js (three.js + the report viewer) for the single-file report.",
+  "license": "MIT",
+  "scripts": { "build": "esbuild main.js --bundle --minify --format=iife --target=es2020 --legal-comments=eof --outfile=../scan_studio/viewer/viewer.bundle.js" },
+  "devDependencies": { "esbuild": "0.24.0", "three": "0.170.0" }
+}

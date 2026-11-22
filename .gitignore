@@ -1,0 +1,11 @@
+.venv/
+.scratch/
+node_modules/
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+.playwright-cli/
+# run outputs: keep the example's finished files, not its working folder
+**/*-out/work/
+examples/jug/jug-out/ar/

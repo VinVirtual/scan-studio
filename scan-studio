@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# scan-studio: a phone video or photo set of an object -> a 3D model for the web and AR. CPU only.
+# Python: $SCAN_STUDIO_PYTHON, else ./.venv/bin/python, else python3. Run isolated (-I): no PYTHONPATH,
+# no user site-packages, no imports from the current folder.
+set -euo pipefail
+R="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+if [ -n "${SCAN_STUDIO_PYTHON:-}" ]; then PY="$SCAN_STUDIO_PYTHON"
+elif [ -x "$R/.venv/bin/python" ]; then PY="$R/.venv/bin/python"
+else PY="$(command -v python3 || true)"; fi
+[ -n "$PY" ] || { echo "scan-studio: python3 not found; run $R/check_env.sh" >&2; exit 2; }
+case "${1:-}" in
+  test) shift; cd "$R"; exec "$PY" -I -m pytest -q -p no:cacheprovider tests "$@" ;;
+  check) exec "$R/check_env.sh" ;;
+  render) shift; exec node "$R/tools/render.mjs" "$@" ;;
+  ""|-h|--help|help) set -- --help ;;
+esac
+exec "$PY" -I -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from scan_studio.cli import main; raise SystemExit(main(sys.argv[1:]))' "$R" "$@"

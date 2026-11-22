@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="__CSP__">
+<meta name="referrer" content="no-referrer">
+<title>__TITLE__</title>
+<style>__CSS__</style>
+</head>
+<body>
+<header class="mast">
+  <div class="mast-title">
+    <p class="eyebrow">scan-studio <span class="dot">·</span> specimen record</p>
+    <h1>__NAME__</h1>
+    <p class="lede">__LEDE__</p>
+  </div>
+  <dl class="mast-meta">__META__</dl>
+</header>
+<main class="record">
+  <section class="stage-wrap" aria-label="3D view">
+    <div id="stage" class="stage" data-mode="after">
+      <canvas id="view" aria-label="the model; drag to turn, scroll to zoom"></canvas>
+      <p id="loading" class="loading">Loading the model…</p>
+      <div class="modes" role="group" aria-label="what to show">
+        <button type="button" data-mode="after" aria-pressed="true">After</button>
+        <button type="button" data-mode="before" aria-pressed="false">Before</button>
+        <button type="button" data-mode="compare" aria-pressed="false">Compare</button>
+      </div>
+      <div id="divider" class="divider" role="slider" tabindex="0" aria-label="compare split; before on the left" aria-valuemin="10" aria-valuemax="90" aria-valuenow="50" hidden><span></span></div>
+      <div class="tools" role="group" aria-label="view tools">
+        <button type="button" id="t-wire" aria-pressed="false">Wireframe</button>
+        <button type="button" id="t-cams" aria-pressed="false">Camera path</button>
+        <button type="button" id="t-spin" aria-pressed="true">Turn</button>
+        <button type="button" id="t-measure" class="measure" aria-pressed="false">Measure</button>
+      </div>
+      <p class="stage-caption"><span class="cap-before">Before: the raw dense surface as points, table and stray bits included.</span><span class="cap-after">After: cleaned, set upright on the floor, simplified and textured.</span></p>
+    </div>
+  </section>
+  <aside class="ledger" aria-label="figures">
+    <div id="figures"></div>
+    <div id="measure-out" class="measure-out" aria-live="polite"></div>
+  </aside>
+  <section class="panel wide">
+    <h2><span class="num">01</span> How the frames were chosen</h2>
+    <p class="hint">Every candidate frame's sharpness (variance of the Laplacian). The capture is cut into equal parts and the sharpest frame of each part is kept, unless it is blurry for its neighbourhood or the camera had not moved.</p>
+    <div id="blur" class="chart"></div>
+  </section>
+  <section class="panel">
+    <h2><span class="num">02</span> Where the time went</h2>
+    <div id="timings"></div>
+  </section>
+  <section class="panel">
+    <h2><span class="num">03</span> People check</h2>
+    <div id="faces"></div>
+    <p class="hint">scan-studio is for objects only. Frames are checked for faces with OpenCV's Haar detectors; a person in the capture stops the run.</p>
+  </section>
+  <section class="panel wide accuracy">
+    <h2><span class="num">04</span> Accuracy against the ground truth</h2>
+    <div id="accuracy"></div>
+  </section>
+</main>
+<footer class="foot">
+  <p>Made on this computer with scan-studio __VERSION__. Nothing here was uploaded; this page makes no network requests. three.js (MIT), Instrument Serif and JetBrains Mono (SIL Open Font License 1.1) are embedded.</p>
+</footer>
+<script id="scan-data" type="application/json">__DATA__</script>
+<script>__JS__</script>
+</body>
+</html>
