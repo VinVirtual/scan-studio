@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from scan_studio import dense, evaluate, media, sfm, texture
-from scan_studio.errors import ScanError
+from scan_studio.errors import BudgetError, ScanError
 from conftest import blurred, textured, write_video
 
 PROBE = """Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'x.mov':
@@ -228,16 +228,128 @@ def test_probe_skips_cover_art():
     assert media.parse_probe(text)[:2] == (1280, 720)
 
 
-def test_photo_long_side_keeps_all_photos_inside_the_pixel_budget():
+def test_photo_long_side_uses_the_real_sizes():
     from scan_studio import budgets
     b = budgets.DEFAULT
-    for n in (1, 50, 300, b.photos):
-        side = media.photo_long_side(n)
-        assert side <= b.work_long_side
-        assert n * side * side * 0.75 <= b.candidate_pixels * 1.001
+    for sizes in ([(4000, 3000)] * 300, [(4000, 1000)] * 400, [(1000, 1000)] * 10, [(4032, 3024), (1080, 1920)] * 150):
+        side = media.photo_long_side(sizes)
+        total = sum(w * h * min(1, side / max(w, h)) ** 2 for w, h in sizes)
+        assert side <= b.work_long_side and total <= b.candidate_pixels
+    assert media.photo_long_side([(800, 600)] * 5) == b.work_long_side      # small sets keep the full work size
+    with pytest.raises(BudgetError):
+        media.photo_long_side([(8000, 8000)] * 400, budgets.with_overrides(candidate_pixels=10_000_000))
 
 
 def test_unreadable_photo_is_a_clear_error(tmp):
     p = os.path.join(tmp, "broken.jpg"); open(p, "wb").write(b"\xff\xd8not really a jpeg")
-    with pytest.raises(ScanError, match="not a readable image"):
+    with pytest.raises(ScanError, match="not a readable"):
         media.load_photo(p)
+
+
+# ------------------------------------------------------------------ hostile inputs
+@pytest.mark.parametrize("name,content", [
+    ("eps.jpg", b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 10 10\nshowpage\n"),
+    ("gif.jpg", b"GIF89a\x01\x00\x01\x00\x00\x00\x00;"),
+    ("tiff.png", b"II*\x00\x08\x00\x00\x00\x00\x00"),
+])
+def test_photos_only_reach_the_jpeg_and_png_decoders(tmp, name, content, monkeypatch):
+    from PIL import EpsImagePlugin
+    called = []
+    monkeypatch.setattr(EpsImagePlugin, "has_ghostscript", lambda: called.append(1) or True, raising=False)
+    p = os.path.join(tmp, name); open(p, "wb").write(content)
+    with pytest.raises(ScanError, match="JPEG or PNG"):
+        media.load_photo(p)
+    with pytest.raises(ScanError):
+        media.photo_sizes([p])
+    assert not called
+
+
+def test_real_jpeg_and_png_still_open(tmp):
+    from PIL import Image
+    for n in ("a.jpg", "b.png"):
+        Image.new("RGB", (40, 30), (10, 20, 30)).save(os.path.join(tmp, n))
+        assert media.load_photo(os.path.join(tmp, n)).shape == (30, 40, 3)
+
+
+def test_concat_list_named_mp4_is_not_followed(tmp):
+    write_video(os.path.join(tmp, "real.mp4"), [textured(240, 320, seed=i) for i in range(5)])
+    lst = os.path.join(tmp, "list.mp4")
+    open(lst, "w").write("ffconcat version 1.0\nfile 'real.mp4'\n")
+    with pytest.raises(ScanError):
+        media.probe_video(lst)
+
+
+def test_duration_not_stated_is_read_as_none_and_frames_are_counted(tmp):
+    text = "Duration: N/A, bitrate: N/A\n  Stream #0:0: Video: h264, yuv420p, 320x240, 10 fps, 10 tbr\n"
+    assert media.parse_probe(text)[3] is None
+    path = write_video(os.path.join(tmp, "clip.mp4"), [textured(240, 320, seed=i) for i in range(17)], fps=10)
+    assert media.count_frames(media.find_ffmpeg(), path) == 17
+
+
+def test_source_resolution_is_capped(tmp):
+    from scan_studio.errors import BudgetError as BE
+    path = write_video(os.path.join(tmp, "wide.mp4"), [np.zeros((64, 4200, 3), np.uint8)] * 2, fps=10)
+    with pytest.raises(BE, match="4096"):
+        media.probe_video(path)
+
+
+def test_decode_deadline_kills_ffmpeg(tmp):
+    path = write_video(os.path.join(tmp, "clip.mp4"), [textured(240, 320, seed=i) for i in range(30)], fps=10)
+    info = media.probe_video(path)
+    with pytest.raises(ScanError, match="longer than"):
+        for _ in media.decode_candidates(info, deadline=0.0):
+            import time
+            time.sleep(0.05)
+
+
+def test_face_sample_covers_candidates_that_are_not_kept(tmp):
+    from scan_studio import budgets, capture
+    from drawn_face import drawn_face
+    frames = []
+    for i in range(30):
+        f = textured(720, 1280, seed=i)
+        if i % 3 == 1:
+            f[150:500, 400:750] = drawn_face(350)
+        frames.append(f)
+    path = write_video(os.path.join(tmp, "clip.mp4"), frames, fps=10)
+    work = os.path.join(tmp, "work"); os.mkdir(work)
+    cap = capture.from_video(path, work, 12, budgets.DEFAULT, log=lambda *_: None)
+    assert sum(1 for b in cap.face_sample.values() if b) >= 5
+    assert not os.path.exists(os.path.join(work, "candidates"))
+
+
+def test_height_plane_finds_the_table_band():
+    rng = np.random.default_rng(0)
+    table = np.c_[rng.uniform(-1, 1, (2000, 2)), rng.normal(0, 0.003, 2000)]
+    obj = rng.uniform([-0.2, -0.2, 0], [0.2, 0.2, 0.6], (800, 3))
+    n, d = dense.height_plane(np.r_[table, obj], np.array([0, 0, 1.0]), np.array([0, 0, 0.3]), 2.0)
+    assert np.allclose(n, [0, 0, 1]) and abs(d) < 0.01
+    assert dense.height_plane(obj, np.array([0, 0, 1.0]), np.array([0, 0, -1.0]), 2.0) is None
+
+
+class FakeRec:
+    def __init__(self, n):
+        self.n = n
+
+    def num_reg_images(self):
+        return self.n
+
+
+def test_mapping_retries_after_a_bad_start():
+    tries = []
+    results = [FakeRec(2), None, FakeRec(80)]
+
+    def once(attempt, seed):
+        tries.append(seed)
+        return results[attempt]
+    best = sfm.map_with_retries(once, 89, log=lambda *_: None)
+    assert best.num_reg_images() == 80 and len(tries) == 3 and len(set(tries)) == 3
+
+
+def test_mapping_stops_when_good_and_keeps_the_best():
+    calls = []
+    best = sfm.map_with_retries(lambda a, s: calls.append(a) or FakeRec(70), 89, log=lambda *_: None)
+    assert best.n == 70 and calls == [0]
+    best = sfm.map_with_retries(lambda a, s: FakeRec([5, 30, 12][a]), 89, log=lambda *_: None)
+    assert best.n == 30
+    assert sfm.map_with_retries(lambda a, s: None, 89, log=lambda *_: None) is None

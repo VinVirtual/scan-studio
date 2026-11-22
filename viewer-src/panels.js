@@ -89,7 +89,7 @@ export function timings (root, r) {
 export function faces (root, r) {
   const f = r.faces
   const p = el('p', `verdict v-${f.verdict}`)
-  p.append(el('strong', '', f.verdict === 'clear' ? 'No people found.' : f.verdict === 'warning' ? 'Check the frames.' : 'Confirmed object.'), document.createTextNode(' ' + f.message + '.'))
+  p.append(el('strong', '', f.verdict === 'clear' ? 'No faces detected.' : f.verdict === 'warning' ? 'Check the frames.' : 'Confirmed object.'), document.createTextNode(' ' + f.message + '.'))
   root.append(p)
 }
 

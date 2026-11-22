@@ -39,6 +39,7 @@ class Region:
     centre: np.ndarray
     radius: float
     camera_distance: float
+    fitted: str = "cameras"      # "ground" when fitted to the points standing on the ground plane
 
 
 def region_of_interest(model: SparseModel, up: np.ndarray | None = None) -> Region:
@@ -51,19 +52,39 @@ def region_of_interest(model: SparseModel, up: np.ndarray | None = None) -> Regi
     D = float(np.median(dists))
     pts = model.points[np.linalg.norm(model.points - c, axis=1) < 0.7 * D]
     if up is not None and len(pts) > 100:
-        plane = ground_plane(pts, up, threshold=0.01 * D, min_share=0.1)
+        plane = ground_plane(pts, up, threshold=0.01 * D, min_share=0.05, iterations=1500)
+        if plane is None:
+            plane = height_plane(pts, up, c, D)
         if plane is not None:
             h = pts @ plane[0] + plane[1]
             obj = pts[h > 0.02 * D]
             if len(obj) > 50:
                 centre = np.median(obj, axis=0)
                 r = float(np.percentile(np.linalg.norm(obj - centre, axis=1), 97) * 1.3)
-                return Region(centre, float(np.clip(r, 0.08 * D, 0.7 * D)), D)
+                return Region(centre, float(np.clip(r, 0.08 * D, 0.7 * D)), D, "ground")
     pd = np.linalg.norm(model.points - c, axis=1)
     near = pd[pd < 0.7 * D]
     r = float(np.percentile(near, 90) * 1.15) if len(near) > 20 else 0.4 * D
     r = float(np.clip(r, 0.12 * D, 0.7 * D))
     return Region(c, r, D)
+
+
+def height_plane(pts: np.ndarray, up: np.ndarray, centre: np.ndarray, D: float):
+    """Deterministic fallback for the ground: the most crowded height (along up) below the point the cameras
+    looked at. A table or floor under the object is a dense band of points at one height."""
+    up = up / np.linalg.norm(up)
+    h = pts @ up
+    below = h[h < centre @ up]
+    if len(below) < 50:
+        return None
+    step = 0.01 * D
+    bins = np.arange(below.min(), below.max() + 2 * step, step)
+    counts, edges = np.histogram(below, bins)
+    k = int(np.argmax(counts))
+    if counts[k] < 0.05 * len(below):
+        return None
+    level = float(np.median(below[(below >= edges[k]) & (below < edges[k + 1])]))
+    return up, -level
 
 
 def view_angle(a: View, b: View) -> float:
@@ -283,7 +304,7 @@ def run(model: SparseModel, image_dir: str, *, up: np.ndarray | None = None, max
             d = depth_for_pair(model.views[j], model.views[i], img(j), img(i), pts_j, region)
         if d is not None:
             depths.append(d)
-    log(f"  stereo: {len(depths)} depth maps from {len(pairs)} pairs")
+    log(f"  stereo: {len(depths)} depth maps from {len(pairs)} pairs (region fitted to the {region.fitted})")
     if len(depths) < 6:
         raise ScanError(f"only {len(depths)} usable stereo pairs")
     before = sum(int(np.count_nonzero(d.depth)) for d in depths)
@@ -294,7 +315,7 @@ def run(model: SparseModel, image_dir: str, *, up: np.ndarray | None = None, max
     mesh, voxel = fuse(depths, region, resolution)
     return mesh, {"method": "sgbm-tsdf", "pairs": len(pairs), "depth_maps": len(depths), "voxel": voxel,
                   "region_radius": region.radius, "region_centre": region.centre.tolist(),
-                  "camera_distance": region.camera_distance}
+                  "camera_distance": region.camera_distance, "region_fitted": region.fitted}
 
 
 def sparse_poisson(model: SparseModel, *, up: np.ndarray | None = None, depth: int = 8, log=print):

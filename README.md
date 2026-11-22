@@ -8,7 +8,7 @@ A phone video of an object becomes a 3D model for the web and AR, on an ordinary
 
 You walk round the object filming it. scan-studio picks the sharp frames, works out where the camera was for each one, builds the surface, cuts away the table, stands the model upright at its real size, simplifies and textures it, and writes a **GLB** (for the web and Android AR) plus one HTML page that shows the model before and after cleaning, lets you measure it, and reports every stage. With the [ar-models](https://github.com/VinVirtual/ar-models) skill installed it also makes the **USDZ** for iPhone AR.
 
-**Objects only, never people.** Every capture is checked for faces, and a capture with people in it is refused.
+**Objects only, never people.** Do not point it at a person. As a guard, the frames are checked for faces, and the run is refused when faces are detected in at least max(2, 5 % of the frames checked). It is a guard against mistakes, not a guarantee: faces smaller than about 6 % of the frame width, tilted or turned heads, people far in the background and brief appearances can pass unnoticed.
 
 It is a [Claude Code](https://claude.com/claude-code) skill (`SKILL.md` tells the assistant how to use it) and works by hand from the command line.
 
@@ -27,28 +27,39 @@ scan-studio evaluate jug-out --truth ground_truth.ply --cameras cameras_gt.json 
 
 | Stage | Result | Time |
 |---|---|---|
-| frames | 89 of 264 kept, 15 rejected as blurry (the four jerks) | 2.3 s |
-| people check | no faces in 89 frames | 4.7 s |
-| structure from motion | 89 of 89 cameras placed, 10,895 points, 0.76 px reprojection error | 40.1 s |
-| dense | 67 depth maps fused (TSDF, 7.4 mm voxels at real scale); 549,009 raw triangles | 15.7 s |
-| clean, orient, scale | table plane found and removed; 382,469 triangles kept | 0.6 s |
-| simplify and texture | 40,000 triangles, 1024x1024 JPEG texture, 89 % of texels coloured from frames | 31.3 s |
-| GLB, report, USDZ | `jug.glb` 1.4 MB, `report.html` 4.1 MB, `ar/jug.usdz` 5.1 MB | 1.6 s |
-| **total** | | **96 s** |
+| frames | 89 of 264 kept, 15 rejected as blurry (the four jerks) | 5.6 s |
+| people check | 146 frames checked (89 kept + every third other candidate); a face-like pattern in 1 frame, so a warning, not a refusal | 4.2 s |
+| structure from motion | 89 of 89 cameras placed, 10,936 points, 0.76 px reprojection error | 30.2 s |
+| dense | 67 depth maps fused in a volume of 0.90 mm voxels (at real scale), fitted to the points standing on the table; 546,376 raw triangles | 10.5 s |
+| clean, orient, scale | table plane found and removed; 367,519 triangles kept | 0.4 s |
+| simplify and texture | 40,000 triangles, 1024x1024 JPEG texture, 89 % of texels coloured from frames | 22.0 s |
+| GLB, report, USDZ | `jug.glb` 1.4 MB, `report.html` 4.1 MB, `ar/jug.usdz` 5.1 MB | 1.0 s |
+| **total** | peak memory 2.2 GB | **74 s** |
 
 **Accuracy against the ground truth** (from `report.json`; the base that stood on the table is left out of the truth):
 
 | | |
 |---|---|
-| mean surface distance (both ways) | **1.83 mm**, 0.59 % of the jug's size |
-| median / 95th percentile | 1.49 mm / 4.56 mm |
-| F-score at 2 mm | 0.69 (precision 0.71, recall 0.68) |
-| height | 198.9 mm (true 199.5 mm; the height was given as 199.5 mm and simplifying moved the top) |
-| camera centres after alignment | 6.9 mm mean error |
+| mean surface distance (both ways) | **1.68 mm**, 0.54 % of the jug's size |
+| median / 95th percentile | 1.33 mm / 4.30 mm |
+| F-score at 2 mm | 0.76 (precision 0.78, recall 0.74) |
+| height | 199.0 mm (given as 199.5 mm; simplifying moved the top) |
+| camera centres after alignment | 5.2 mm mean error |
 
-Alignment uses only the cameras (rotation and translation, no rescaling), then rigid ICP. Before ICP the mean distance is 2.26 mm. Repeated runs vary a little because structure from motion is multithreaded: three runs with exactly these settings (one from a fresh clone) gave 1.71, 1.83 and 1.87 mm, and took 76 to 97 seconds. The model is 1.5 cm longer than the real jug (21.6 cm against 20.1 cm, spout to handle) because a thin fin of stereo error at the rim survives cleaning.
+Alignment uses only the cameras (rotation and translation, no rescaling), then rigid ICP; before ICP the mean distance is 1.96 mm.
 
-Committed outputs: [`jug-out/jug.glb`](examples/jug/jug-out/jug.glb), [`jug-out/report.html`](examples/jug/jug-out/report.html), [`jug-out/report.json`](examples/jug/jug-out/report.json). The USDZ pair in `jug-out/ar/` is not committed (6.9 MB); `run.sh` makes it in under two seconds once ar-models is installed.
+**Repeatability.** Structure from motion is multithreaded, so runs are not bit-for-bit identical. The same capture and settings with different `--threads` (one run each, same machine, other jobs running):
+
+| `--threads` | mean distance | F-score at 2 mm | kept triangles | time | peak memory |
+|---|---|---|---|---|---|
+| 2 | 1.79 mm | 0.72 | 362,674 | 150 s | 1.2 GB |
+| 4 | 1.80 mm | 0.71 | 346,547 | 94 s | 1.3 GB |
+| 8 | 1.95 mm | 0.64 | 318,236 | 71 s | 2.3 GB |
+| 16 | 1.67 mm | 0.77 | 327,837 | 68 s | 4.4 GB |
+
+An earlier version fitted the dense volume to the camera rays when RANSAC missed the table among the sparse points; an independent run then measured 2.36 mm and F 0.48 with 134k triangles. The volume is now fitted to the points standing on the table (RANSAC, then a deterministic height histogram as a fallback), and the mapper restarts from another seed when a bad start places only a handful of cameras. The model is about 0.4 cm longer than the real jug (20.5 cm against 20.1 cm, spout to handle) because a thin fin of stereo error at the rim survives cleaning.
+
+Committed outputs: [`jug-out/jug.glb`](examples/jug/jug-out/jug.glb), [`jug-out/report.html`](examples/jug/jug-out/report.html), [`jug-out/report.json`](examples/jug/jug-out/report.json). The USDZ pair in `jug-out/ar/` is not committed (6.9 MB); `run.sh` makes it in about a second once ar-models is installed. Its texture is capped at 1024 px by ar-models' default.
 
 ## Install
 
@@ -87,12 +98,12 @@ Walk slowly all the way round, phone upright, ideally twice (once at table heigh
 ## How it works
 
 1. **Frames.** ffmpeg decodes up to 600 evenly spaced candidates (capped in total pixels). Each gets a blur score (variance of the Laplacian at a fixed width). The capture is cut into equal parts (90 by default) and the sharpest frame of each part is kept, unless it is blurry *for its neighbourhood* (below 45 % of the local median, so a dim but steady video is not thrown away) or the camera had not moved.
-2. **People check.** OpenCV's Haar face detectors (frontal and profile) run on every kept frame. Faces in at least 2 frames (or 5 %) stop the run with exit code 4 and the extracted frames are deleted. A single hit is a warning in the report.
+2. **People check.** OpenCV's Haar face detectors (frontal `alt2`, plus the default frontal and profile models with stricter settings) run at 640 px width on every kept frame and on every third other candidate of a video. Faces in at least max(2, 5 % of the frames checked) stop the run with exit code 4; the extracted frames, and any earlier model or report in that output folder, are deleted. Fewer hits give a loud warning on the terminal and in the report. Faces narrower than 40 px at 640 px (about 6 % of the frame width), tilted or turned heads, people far in the background and brief appearances can pass.
 3. **Structure from motion.** pycolmap (COLMAP's Python package) on the CPU: SIFT features, matching of each frame against its 12 neighbours plus a coarse all-against-all grid (so the end of the orbit ties back to the start), incremental mapping with one shared camera.
 4. **Dense surface.** COLMAP's own dense stereo needs CUDA (`pycolmap.patch_match_stereo` stops with "requires CUDA or HIP" here), so scan-studio pairs each frame with a neighbour 3 to 16 degrees away, rectifies the pair with the solved poses, and runs OpenCV semi-global block matching with a left-right check. Depth next to silhouettes is dropped, then each depth pixel must agree with at least two neighbouring depth maps. The depth maps are fused in an Open3D TSDF volume sized to the object (fitted to the sparse points standing on the ground plane), and marching cubes gives a coloured mesh. If stereo fails, a Poisson surface through the sparse points is the fallback.
-5. **Clean.** The ground plane is found by RANSAC (its normal must agree with the camera-derived up and the cameras must be above it) and everything under it is removed; faces far from any matched feature (stereo fins along silhouettes) go; the largest connected piece is kept. `--box` crops to a box in output metres.
+5. **Clean.** The ground plane is found by RANSAC (its normal must agree with the camera-derived up and the cameras must be above it) and everything under it is removed; faces far from any matched feature (stereo fins along silhouettes) go; the largest connected piece is kept. `--box xmin,ymin,zmin,xmax,ymax,zmax` crops to a box read in the frame the model would have without the box (the coordinates the report's Measure tool shows for a run with the same size option); the kept part is then set on the floor and centred again, and `--height`/`--longest`/`--width` are applied to the kept part, so the size you give is the size of what you get. With `--points` the scale comes from the points and is not changed by the crop.
 6. **Orient.** Up is the direction most perpendicular to every camera's right axis (people hold phones level), signed by the cameras' up axes, then refined to the ground-plane normal. The side seen in the first frame faces +Z (the front in glTF viewers). The base is put on y = 0.
-7. **Scale.** `--height`, `--longest`, `--width`, or two picked points and their real distance (`--points` with `--length`). Without one the model keeps COLMAP's arbitrary units and no USDZ is made.
+7. **Scale.** `--height`, `--longest`, `--width`, or two picked points and their real distance (`--points` with `--length`). Without one the model keeps COLMAP's arbitrary units and no USDZ is made. `scale` on a finished run rescales the GLB and the report; an existing `ar/` pair is made again with `--usdz`, or removed (with a message) without it, so no wrong-size AR file is left behind.
 8. **Simplify and texture.** Quadric decimation (Open3D) to the triangle budget, UV atlas with xatlas, and each texel coloured from up to three frames that see its triangle most squarely, after a ray test that it is not hidden. Texels no frame sees take the nearest dense colour.
 9. **Write.** GLB (trimesh), checked by reading it back (header, chunks, every accessor inside its buffer). Then `report.json` and `report.html`.
 
@@ -109,13 +120,13 @@ Walk slowly all the way round, phone upright, ideally twice (once at table heigh
 | `scan-studio report <out>` | write `report.html` again |
 | `scan-studio check` / `env` / `test` | environment check / packages / test suite |
 
-Main `run` options: `--height`/`--longest`/`--width` or `--points` + `--length`, `--frames 90`, `--triangles 80000`, `--texture 2048` (0 = vertex colours), `--box`, `--keep-ground`, `--dense auto|stereo|sparse`, `--threads 8`, `--usdz`, `--confirm-object` (only for faces that belong to an object, such as a statue; never for a person).
+Main `run` options: `--height`/`--longest`/`--width` or `--points` + `--length`, `--frames 90`, `--triangles 80000`, `--texture 2048` (0 = vertex colours), `--box`, `--keep-ground`, `--dense auto|stereo|sparse`, `--threads 8` (also limits OpenMP, BLAS and OpenCV threads), `--usdz` (the USDZ comes from ar-models, which caps its textures at 1024 px by default; if ar-models fails, the GLB and report are kept and the run exits 1), `--confirm-object` (only for faces that belong to an object, such as a statue; never for a person).
 
 Exit codes: 0 done, 1 the capture could not become a model, 2 a usage mistake, 3 over a size limit, 4 people found, 5 internal error.
 
 ## Safety
 
-- **People.** The tool refuses captures with faces and says so. The face check is a guard, not a guarantee (Haar detectors miss turned or small faces and can fire on face-like patterns). Do not use it on people.
+- **People.** The tool refuses captures where it detects faces (see the people check above for the threshold). It is a guard, not a guarantee: Haar detectors miss small, tilted, turned or background faces and can fire on face-like patterns. Do not use it on people.
 - **Inputs.** Local files only. ffmpeg runs with `-protocol_whitelist file,pipe`. Photo folders skip symlinks that point outside the folder. Budgets cap totals, not just items: input bytes, number of photos, pixels per photo (checked before decoding), decoded candidate frames and their total pixels, kept frames, triangles, texture size and report size.
 - **Outputs.** Written to a temporary file and renamed into place; output files or folders that are symbolic links are refused.
 - **The report.** Content security policy `default-src 'none'`, with only its own inline script and style allowed by SHA-256 hash: no network requests, no other scripts. Every input name is escaped; the data block cannot close its `<script>` element.
@@ -125,14 +136,14 @@ Exit codes: 0 done, 1 the capture could not become a model, 2 a usage mistake, 3
 
 - **CPU only, by design.** The dense step is two-view stereo, not COLMAP's multi-view PatchMatch (CUDA only) or OpenMVS (not installable here without root). Surfaces come out smoother and less detailed than GPU photogrammetry; thin parts may be lost or thickened, and concave insides (the inside of a jug) are partial.
 - **No Gaussian splats.** No splat trainer runs in reasonable time on a CPU (the CPU mode of OpenSplat exists but takes hours for a small scene and is AGPL). The solved cameras and points are in `work/sparse/` in COLMAP's text format, ready for a GPU splat tool.
-- **The face check can fire on patterns.** OpenCV's default frontal and profile Haar models fired on the demo jug's painted pattern (7 of 89 frames, which would have refused it), so they now need 15 overlapping detections and the more precise `alt2` frontal model needs 6. With these settings 1 of the 264 rendered frames still triggers it, which is a warning, not a refusal. Busy prints on a real object may need `--confirm-object` after you have looked at the frames.
+- **The face check can fire on patterns.** OpenCV's default frontal and profile Haar models fired on the demo jug's painted pattern (7 of 89 frames, which would have refused it), so they now need 15 overlapping detections and the more precise `alt2` frontal model needs 6. With these settings 1 of the 146 frames checked in the demo still triggers it, which gives a warning, not a refusal. Busy prints on a real object may need `--confirm-object` after you have looked at the frames.
 - **The base is open** where the object stood on the table.
 - **Real-world captures were not tested here** (no phone on this machine). The demo is a rendered video with simulated hand shake and motion blur; real phone video adds rolling shutter, exposure changes and compression, which usually cost some accuracy.
-- **Runtime** depends on the machine and its load; see the example for measured numbers.
+- **Runtime and memory** depend on the machine, its load and `--threads`; see the example for measured numbers. Peak memory grows with threads (SIFT extraction and matching keep buffers per thread): 1.2 GB at 2 threads and 4.4 GB at 16 for the demo. At the largest budgets (200 frames, 500,000 triangles, 4096 px texture) expect several times more; this was not measured. If the process is killed, the launcher says so ("killed by signal 9"); retry with `--threads 4`.
 
 ## Tests
 
-`./scan-studio test` runs 162 tests: frame scoring and selection, the people check (on faces drawn with ellipses, never a photograph), scaling maths, orientation, ground plane, cleaning, stereo helpers, texture baking, GLB writing and validation (including corrupt files), path safety, budgets, report escaping and CSP, the ar-models hand-off, the command line, and the whole pipeline end to end on 19 small frames of the demo. CI runs all of them on GitHub's Ubuntu runner, and a skipped test fails the run. Not tested in CI: Blender (only to remake the demo) and the headless-Chrome screenshots.
+`./scan-studio test` runs 186 tests: frame scoring and selection, the people check (on faces drawn with ellipses, never a photograph), scaling maths, orientation, ground plane, cleaning, stereo helpers, texture baking, GLB writing and validation (including corrupt files), path safety, budgets, report escaping and CSP, the ar-models hand-off, the command line, and the whole pipeline end to end on 19 small frames of the demo. CI runs all of them on GitHub's Ubuntu runner, and a skipped test fails the run. Not tested in CI: Blender (only to remake the demo) and the headless-Chrome screenshots.
 
 ## Licence
 

@@ -2,7 +2,7 @@
 # scan-studio: a phone video or photo set of an object -> a 3D model for the web and AR. CPU only.
 # Python: $SCAN_STUDIO_PYTHON, else ./.venv/bin/python, else python3. Run isolated (-I): no PYTHONPATH,
 # no user site-packages, no imports from the current folder.
-set -euo pipefail
+set -uo pipefail
 R="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 if [ -n "${SCAN_STUDIO_PYTHON:-}" ]; then PY="$SCAN_STUDIO_PYTHON"
 elif [ -x "$R/.venv/bin/python" ]; then PY="$R/.venv/bin/python"
@@ -14,4 +14,17 @@ case "${1:-}" in
   render) shift; exec node "$R/tools/render.mjs" "$@" ;;
   ""|-h|--help|help) set -- --help ;;
 esac
-exec "$PY" -I -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from scan_studio.cli import main; raise SystemExit(main(sys.argv[1:]))' "$R" "$@"
+# not exec: if Python dies from a signal (out of memory, a native crash), say so instead of exiting silently
+"$PY" -I -X faulthandler -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from scan_studio.cli import main; raise SystemExit(main(sys.argv[1:]))' "$R" "$@"
+rc=$?
+if [ $rc -ge 128 ]; then
+  sig=$((rc - 128))
+  case $sig in
+    9) why="probably out of memory; try --threads 4, fewer --frames or a smaller --texture" ;;
+    11|6|7) why="a native library crashed; the Python trace above (faulthandler) shows where" ;;
+    *) why="stopped from outside" ;;
+  esac
+  echo "scan-studio: killed by signal $sig ($(kill -l $sig 2>/dev/null || echo '?')): $why" >&2
+  exit $rc
+fi
+exit $rc

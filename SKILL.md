@@ -1,6 +1,6 @@
 ---
 name: scan-studio
-description: Turn a phone video (or a set of photos) of an OBJECT into a 3D model for the web and AR, on a CPU with no GPU. Picks sharp, well spread frames (blur scoring), refuses captures with people in them (face check), runs structure from motion with pycolmap (COLMAP), builds a dense surface from two-view stereo fused in a TSDF volume, removes the table and stray bits, stands the model upright on the floor, sets the real size from a known height or two measured points, simplifies and textures it, and writes a GLB plus a one-file HTML report with a before/after 3D view, a measuring tool, the blur chart and stage timings. Optionally makes the iPhone USDZ through the ar-models skill. Use when the user wants to scan, digitise or photogrammetry an object, make a 3D model from a video or photos, turn a phone video into a GLB, 3D-scan a product, sculpture, shoe, toy or part for a website or AR, or measure or fix the size of such a scan. Objects only, never people.
+description: Turn a phone video (or a set of photos) of an OBJECT into a 3D model for the web and AR, on a CPU with no GPU. Picks sharp, well spread frames (blur scoring), refuses captures where it detects faces, runs structure from motion with pycolmap (COLMAP), builds a dense surface from two-view stereo fused in a TSDF volume, removes the table and stray bits, stands the model upright on the floor, sets the real size from a known height or two measured points, simplifies and textures it, and writes a GLB plus a one-file HTML report with a before/after 3D view, a measuring tool, the blur chart and stage timings. Optionally makes the iPhone USDZ through the ar-models skill. Use when the user wants to scan, digitise or photogrammetry an object, make a 3D model from a video or photos, turn a phone video into a GLB, 3D-scan a product, sculpture, shoe, toy or part for a website or AR, or measure or fix the size of such a scan. Objects only, never people.
 ---
 
 # scan-studio
@@ -11,10 +11,10 @@ Skill folder (written `$S` below): this folder. Every command is `$S/scan-studio
 
 ## Before you start
 
-- **Objects only.** Never scan a person, a face or anyone's body, with or without consent. If the user asks for a person, say no and explain that this tool is for objects. The run stops by itself (exit code 4) when faces are found in several frames, and deletes the extracted frames. `--confirm-object` exists only for faces that belong to an object (a statue, a doll, a printed picture) with no person in the frames. Ask the user before using it and never use it for a real person.
+- **Objects only.** Never scan a person, a face or anyone's body, with or without consent. If the user asks for a person, say no and explain that this tool is for objects. The run stops by itself (exit code 4) when faces are detected in at least max(2, 5 % of the frames checked), and deletes the extracted frames. The check misses small (under about 6 % of the frame width), tilted, turned and background faces, so it does not replace looking at the video. `--confirm-object` exists only for faces that belong to an object (a statue, a doll, a printed picture) with no person in the frames. Ask the user before using it and never use it for a real person.
 - **Rights.** The model is a copy of the object's shape and surface. Ask whose object it is if that matters (artwork, products of other brands).
 - **Size.** Structure from motion has no units. For AR, ask the user for one real measurement: the height, the longest side, or the distance between two points they can measure with a ruler. Never guess it.
-- **No GPU here.** Everything runs on the CPU. The demo (89 frames of 720p video) took 96 seconds on 8 threads; larger frames, more frames and photo sets take longer. Say so before starting a long run.
+- **No GPU here.** Everything runs on the CPU. The demo (89 frames of 720p video) took 68 to 150 seconds on 16 to 2 threads; larger frames, more frames and photo sets take longer. Say so before starting a long run.
 
 ## How to film (tell the user)
 
@@ -35,7 +35,7 @@ Walk slowly all the way round the object, phone upright, at two heights if you c
    ```
    Check: is the object complete, upright, standing on the floor, free of table pieces and fins, and is the texture right?
 4. Fix what you see:
-   - table left under the object -> it was not found as a plane; use `--box xmin,ymin,zmin,xmax,ymax,zmax` (metres, y up, numbers from the report's Measure tool) or film with more of the table visible.
+   - table left under the object -> it was not found as a plane; use `--box xmin,ymin,zmin,xmax,ymax,zmax` (metres, y up, numbers from the report's Measure tool of a run with the same size option; the size option is then applied to what the box keeps) or film with more of the table visible.
    - parts of the object missing -> `--keep-ground` if a flat base was cut off; otherwise film more slowly with more overlap and more light.
    - lying on its side -> the camera was held sideways for most of the video; film again upright.
    - few cameras placed -> plain or shiny surface; add texture around the object (newspaper), or use photos.
@@ -50,7 +50,9 @@ Walk slowly all the way round the object, phone upright, at two heights if you c
 
 `--frames N` (default 90, 12 to 200), `--triangles N` (default 80000), `--texture 2048` (power of two, `0` for vertex colours), `--dense stereo|sparse|auto`, `--threads N`, `--keep-ground`, `--box`. `scan-studio frames <video>` and `scan-studio faces <video|folder|image>` run one stage alone. `scan-studio evaluate <out> --truth mesh.ply --cameras cams.json` measures a test capture against its ground truth. `scan-studio report <out>` rewrites the page.
 
-Exit codes: 0 done, 1 the capture could not become a model, 2 usage mistake, 3 over a size limit, 4 people found, 5 internal error.
+Exit codes: 0 done, 1 the capture could not become a model (or fewer than 30 % of cameras placed, or the USDZ failed after the GLB and report were written), 2 usage mistake, 3 over a size limit, 4 faces detected, 5 internal error. If the process is killed (out of memory), the launcher says "killed by signal N"; retry with `--threads 4` or fewer `--frames`.
+
+A face WARNING on the terminal (faces in too few frames to refuse) means: look at the frames in `work/images/` before delivering.
 
 ## Safety
 

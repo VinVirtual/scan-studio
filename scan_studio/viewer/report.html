@@ -53,7 +53,7 @@
   <section class="panel">
     <h2><span class="num">03</span> People check</h2>
     <div id="faces"></div>
-    <p class="hint">scan-studio is for objects only. Frames are checked for faces with OpenCV's Haar detectors; a person in the capture stops the run.</p>
+    <p class="hint">scan-studio is for objects only. Frames are checked for faces with OpenCV's Haar detectors, and the run stops when faces are detected in at least max(2, 5 %) of the frames checked. Small, tilted, turned or background faces can pass, so this is a guard, not a guarantee.</p>
   </section>
   <section class="panel wide accuracy">
     <h2><span class="num">04</span> Accuracy against the ground truth</h2>

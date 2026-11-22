@@ -96,6 +96,13 @@ def rescale(out: str, *, height=None, longest=None, width=None, points=None, len
     rep.pop("accuracy", None)   # measured at the old scale; run evaluate again
     before = {"points": (np.asarray(before["points"]) * s).astype(np.float32), "colors": before["colors"]}
     stem = os.path.splitext(os.path.basename(gpath))[0]
+    from . import ar
+    if not usdz and rep.get("usdz"):
+        # the AR pair was made at the old size: remove it rather than leave a wrong-size copy beside the model
+        gone = ar.remove_pair(out, stem)
+        rep.pop("usdz", None)
+        if gone:
+            log(f"removed {', '.join(gone)}: they had the old size. Run `scale ... --usdz` to make them again")
     if usdz:
         pending = write_bytes(os.path.join(out, f".pending-{stem}.glb"), new)
         try:

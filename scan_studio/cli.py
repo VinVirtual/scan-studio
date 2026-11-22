@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import json
 import os
 import sys
@@ -69,8 +70,25 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
+def limit_threads(n: int) -> None:
+    """Make every native library (OpenMP in Open3D and pycolmap, TBB, BLAS, OpenCV) use at most n threads."""
+    for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "TBB_NUM_THREADS"):
+        os.environ[var] = str(n)
+    try:
+        import cv2
+        cv2.setNumThreads(n)
+    except ImportError:
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    try:
+        faulthandler.enable()   # a native crash prints where it happened instead of dying silently
+    except (OSError, ValueError, AttributeError):   # stderr without a file descriptor (captured in tests)
+        pass
     args = _parser().parse_args(argv)
+    if getattr(args, "threads", None) is not None and 1 <= args.threads <= 64:
+        limit_threads(args.threads)
     try:
         if args.cmd == "run":
             return _run(args)

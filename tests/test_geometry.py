@@ -198,3 +198,35 @@ def test_near_points_drops_far_fins():
     support = np.array([[0.5, 0.5, 0.0]])
     keep = g.near_points(v, f, support, 1.0)
     assert keep.tolist() == [True, True, False]
+
+
+def test_box_is_applied_before_the_height_is_set():
+    from types import SimpleNamespace
+    from scan_studio.pipeline import place_scale_crop
+    import trimesh
+    # a tall box standing on z = 0 (model frame, z up): 1 x 1 x 4 units
+    m = trimesh.creation.box(extents=[1, 1, 4]); m.vertices[:, 2] += 2
+    m = m.subdivide().subdivide().subdivide()
+    o = SimpleNamespace(height=0.2, longest=None, width=None, points=None, length=None,
+                        box="-10,0,-10,10,0.1,10")    # keep the bottom 0.1 m of the 0.2 m tall model
+    place, info, V, F, _ = place_scale_crop(o, np.asarray(m.vertices), np.asarray(m.faces), None,
+                                            np.array([0, 0, 1.0]), np.array([0, -10.0, 1.0]))
+    out = place.apply(V)
+    assert out[:, 1].min() == pytest.approx(0.0, abs=1e-9)
+    assert out[:, 1].max() == pytest.approx(0.2)          # the delivered part has the height asked for
+    assert info["method"] == "height"
+    assert len(F) < len(m.faces)
+
+
+def test_box_with_points_keeps_the_points_scale():
+    from types import SimpleNamespace
+    from scan_studio.pipeline import place_scale_crop
+    import trimesh
+    m = trimesh.creation.box(extents=[1, 1, 4]); m.vertices[:, 2] += 2
+    m = m.subdivide().subdivide().subdivide()
+    o = SimpleNamespace(height=None, longest=None, width=None, points=("0,0,0", "0,1,0"), length=0.05,
+                        box="-10,0,-10,10,0.1,10")
+    place, info, V, _, _ = place_scale_crop(o, np.asarray(m.vertices), np.asarray(m.faces), None,
+                                            np.array([0, 0, 1.0]), np.array([0, -10.0, 1.0]))
+    assert place.scale == pytest.approx(0.05) and info["method"] == "points"
+    assert place.apply(V)[:, 1].max() == pytest.approx(0.1, abs=0.01)

@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import os
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import cv2
 import numpy as np
 
+from . import faces
 from . import frames as fr
 from . import media
 from .budgets import Budgets, check_total
@@ -31,6 +32,7 @@ class Capture:
     height: int
     video: dict | None
     same_size: bool = True
+    face_sample: dict = field(default_factory=dict)   # candidate index -> face boxes, for a sample of candidates
 
 
 def _save(path: str, rgb: np.ndarray) -> None:
@@ -40,51 +42,61 @@ def _save(path: str, rgb: np.ndarray) -> None:
     write_bytes(path, buf.tobytes())
 
 
+FACE_SAMPLE_EVERY = 3   # while decoding a video, also check every 3rd candidate for faces (not only the kept ones)
+
+
 def from_video(path: str, work: str, target: int, budgets: Budgets, log=print) -> Capture:
     info = media.probe_video(path, budgets)
     log(f"  video: {info.width}x{info.height}, {info.fps:.3g} fps, {info.duration:.1f} s")
     cand_dir = ensure_dir(os.path.join(work, "candidates"), work)
-    scores, thumbs, times = [], [], []
-    size = (0, 0)
-    pixels = 0
-    for i, (t, rgb) in enumerate(media.decode_candidates(info, budgets)):
-        pixels += rgb.shape[0] * rgb.shape[1]
-        check_total("decoded pixels", pixels, budgets.candidate_pixels)
-        scores.append(fr.blur_score(rgb))
-        thumbs.append(fr.thumbnail(rgb))
-        times.append(t)
-        size = (rgb.shape[1], rgb.shape[0])
-        _save(os.path.join(cand_dir, f"{i:05d}.jpg"), rgb)
-    sel = fr.select_frames(scores, target, thumbs=thumbs)
-    cap = _finish(work, cand_dir, [f"{i:05d}.jpg" for i in range(len(scores))], sel, scores, times, size, "video")
+    try:
+        scores, thumbs, times, sample = [], [], [], {}
+        size = (0, 0)
+        pixels = 0
+        for i, (t, rgb) in enumerate(media.decode_candidates(info, budgets)):
+            pixels += rgb.shape[0] * rgb.shape[1]
+            check_total("decoded pixels", pixels, budgets.candidate_pixels)
+            scores.append(fr.blur_score(rgb))
+            thumbs.append(fr.thumbnail(rgb))
+            times.append(t)
+            size = (rgb.shape[1], rgb.shape[0])
+            if i % FACE_SAMPLE_EVERY == 1:
+                sample[i] = faces.detect(rgb)
+            _save(os.path.join(cand_dir, f"{i:05d}.jpg"), rgb)
+        sel = fr.select_frames(scores, target, thumbs=thumbs)
+        cap = _finish(work, cand_dir, [f"{i:05d}.jpg" for i in range(len(scores))], sel, scores, times, size, "video")
+    finally:
+        shutil.rmtree(cand_dir, ignore_errors=True)
+    cap.face_sample = sample
     cap.video = {"width": info.width, "height": info.height, "fps": info.fps, "duration": info.duration,
                  "rotation": info.rotation}
-    shutil.rmtree(cand_dir, ignore_errors=True)
     return cap
 
 
 def from_photos(folder: str, work: str, target: int, budgets: Budgets, log=print) -> Capture:
     paths = media.list_photos(folder, budgets)
+    long_side = media.photo_long_side(media.photo_sizes(paths, budgets), budgets)
     cand_dir = ensure_dir(os.path.join(work, "candidates"), work)
-    scores, sizes = [], set()
-    pixels = 0
-    long_side = media.photo_long_side(len(paths), budgets)
-    for i, p in enumerate(paths):
-        rgb = media.load_photo(p, budgets, long_side)
-        pixels += rgb.shape[0] * rgb.shape[1]
-        check_total("decoded pixels", pixels, budgets.candidate_pixels)
-        scores.append(fr.blur_score(rgb))
-        sizes.add((rgb.shape[1], rgb.shape[0]))
-        _save(os.path.join(cand_dir, f"{i:05d}.jpg"), rgb)
-    log(f"  photos: {len(paths)}")
-    # photos are not a timeline: drop the blurry ones, keep order, thin evenly if there are too many
-    sel = fr.select_frames(scores, min(target, len(scores)), radius=len(scores))
-    size = max(sizes) if sizes else (0, 0)
-    cap = _finish(work, cand_dir, [f"{i:05d}.jpg" for i in range(len(scores))], sel, scores,
-                  [float(i) for i in range(len(scores))], size, "photos")
+    try:
+        scores, sizes = [], set()
+        pixels = 0
+        for i, p in enumerate(paths):
+            rgb = media.load_photo(p, budgets, long_side)
+            pixels += rgb.shape[0] * rgb.shape[1]
+            check_total("decoded pixels", pixels, budgets.candidate_pixels)
+            scores.append(fr.blur_score(rgb))
+            sizes.add((rgb.shape[1], rgb.shape[0]))
+            _save(os.path.join(cand_dir, f"{i:05d}.jpg"), rgb)
+        log(f"  photos: {len(paths)}")
+        # photos are not a timeline: drop the blurry ones, keep order, thin evenly if there are too many
+        sel = fr.select_frames(scores, min(target, len(scores)), radius=len(scores))
+        size = max(sizes) if sizes else (0, 0)
+        cap = _finish(work, cand_dir, [f"{i:05d}.jpg" for i in range(len(scores))], sel, scores,
+                      [float(i) for i in range(len(scores))], size, "photos")
+    finally:
+        shutil.rmtree(cand_dir, ignore_errors=True)
     cap.sources = [os.path.basename(paths[i]) for i in sel.chosen]
     cap.same_size = len(sizes) == 1
-    shutil.rmtree(cand_dir, ignore_errors=True)
     return cap
 
 

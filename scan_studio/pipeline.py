@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import shutil
 import time
 from dataclasses import dataclass, field
 
@@ -104,6 +105,7 @@ def validate(o: Options) -> None:
 
 def run(o: Options, log=print) -> dict:
     validate(o)
+    cv2.setNumThreads(o.threads)
     out = ensure_dir(o.out)
     work = ensure_dir(os.path.join(out, "work"), out)
     timer = Timer(log)
@@ -121,11 +123,16 @@ def run(o: Options, log=print) -> dict:
                         "Film slower, with more light, all the way round")
 
     timer.start("faces: objects only, never people")
-    face_rep = faces.check_frames(capture.load_chosen(cap), confirmed_object=o.confirm_object,
-                                  max_boxes=o.budgets.face_boxes)
+    # every kept frame, plus the sample of other candidates checked while decoding
+    per_frame = [faces.detect(f) for f in capture.load_chosen(cap)]
+    per_frame += [boxes for i, boxes in sorted(cap.face_sample.items()) if i not in set(cap.chosen)]
+    face_rep = faces.judge(per_frame, confirmed_object=o.confirm_object, max_boxes=o.budgets.face_boxes)
     log(f"  {face_rep.message}")
+    if face_rep.verdict in ("warning", "confirmed-object"):
+        log("  " + "!" * 72 + f"\n  WARNING: {face_rep.message}\n  " + "!" * 72)
     if face_rep.verdict == "refused":
         capture.forget_frames(cap)
+        _clear_previous(out, o.name)
         write_text(os.path.join(out, "report.json"), json.dumps(
             {"tool": "scan-studio", "version": __version__, "refused": "faces", "faces": face_rep.to_json()}, indent=1))
         raise FacesFound(face_rep.message)
@@ -135,6 +142,9 @@ def run(o: Options, log=print) -> dict:
                     one_camera=cap.same_size, log=log)
     log(f"  placed {model.registered} of {model.total} cameras, {len(model.points):,} points, "
         f"reprojection error {model.reprojection_error:.2f} px")
+    if model.registered < 0.3 * model.total:
+        raise ScanError(f"structure from motion placed only {model.registered} of {model.total} cameras (under 30 %); "
+                        "the model would cover only part of the object. Film slower, with more overlap and texture")
 
     timer.start("dense surface")
     views = model.views
@@ -180,22 +190,7 @@ def run(o: Options, log=print) -> dict:
         log(f"  filled small holes: {len(F2) - n_before:,} triangles added")
     if len(F2) < 100:
         raise ScanError("after cleaning almost nothing is left; try --keep-ground, or film the object larger in frame")
-    place = geometry.place(V2, up, views[0].centre)
-    Vout = place.apply(V2)
-    scale_info = {"method": "none", "units": "unknown (structure from motion has no scale)"}
-    if _scale_requested(o):
-        s, scale_info = _scale(o, Vout)
-        place = place.then_scale(s)
-        Vout = place.apply(V2)
-        geometry.check_real_size(Vout.max(0) - Vout.min(0))
-    if o.box:
-        lo, hi = geometry.parse_box(o.box)
-        m = geometry.inside_box(Vout, F2, lo, hi)
-        if m.sum() < 100:
-            raise UsageError("--box leaves almost nothing of the model; check the numbers against the report")
-        V2, F2, C2 = geometry.compact(V2, F2, m, C2)
-        floor = place.apply(V2)[:, 1].min()
-        place = geometry.Similarity(place.R, place.t - np.array([0, floor, 0]), place.scale)
+    place, scale_info, V2, F2, C2 = place_scale_crop(o, V2, F2, C2, up, views[0].centre)
     log(f"  kept {len(F2):,} of {raw_tris:,} triangles; ground plane {'removed' if plane is not None else 'not found'}")
 
     timer.start("decimate and texture")
@@ -227,7 +222,9 @@ def run(o: Options, log=print) -> dict:
         "sfm": {"registered": model.registered, "total": model.total, "points": int(len(model.points)),
                 "reprojection_error_px": round(model.reprojection_error, 3),
                 "cameras": [{"name": v.name, "centre": c.tolist()} for v, c in zip(views, cams)]},
-        "dense": {k: v for k, v in dense_info.items() if k not in ("region_centre",)} | {"triangles": raw_tris},
+        "dense": {k: v for k, v in dense_info.items() if k not in ("region_centre",)}
+                 | {"triangles": raw_tris, "voxel_m": dense_info["voxel"] * place.scale if dense_info.get("voxel")
+                    and scale_info["method"] != "none" else None},
         "clean": {"ground_plane": plane is not None, "support_distance": support, "kept_triangles": int(len(F2)), "box": o.box},
         "scale": scale_info,
         "transform": place.to_json(),
@@ -236,15 +233,61 @@ def run(o: Options, log=print) -> dict:
                   "texture": o.texture, "texture_coverage": tex_share},
         "machine": {"cpu_threads": o.threads, "gpu": False, "python": platform.python_version()},
     }
+    usdz_error = None
     if o.usdz:
         timer.start("USDZ via ar-models")
         from . import ar
-        rep["usdz"] = ar.convert(glb_path, out, o.name, height=float(rep["model"]["size"][1]), log=log)
+        try:
+            rep["usdz"] = ar.convert(glb_path, out, o.name, height=float(rep["model"]["size"][1]), log=log)
+        except ScanError as e:   # keep the model and the report; say so loudly and exit non-zero at the end
+            usdz_error = str(e)
+            rep["usdz"] = {"error": usdz_error}
     timer.stop()
     rep["timings"] = {"stages": timer.stages, "total_seconds": timer.total}
     report.write(out, rep, data, before)
     log(f"done in {timer.total:.0f} s: {glb_path}")
+    if usdz_error:
+        raise ScanError(f"the GLB and the report were written, but the USDZ failed: {usdz_error}")
     return rep
+
+
+def place_scale_crop(o: Options, V, F, C, up, first_cam):
+    """Orient, crop to --box and scale. The box is read in the frame the model would have without it (same size
+    option); then the kept part is set on the floor and centred again, and --height/--longest/--width are
+    applied to the kept part, so the size given is the size of what is delivered."""
+    place = geometry.place(V, up, first_cam)
+    scale_info = {"method": "none", "units": "unknown (structure from motion has no scale)"}
+    s = 1.0
+    if _scale_requested(o):
+        s, scale_info = _scale(o, place.apply(V))
+    if o.box:
+        lo, hi = geometry.parse_box(o.box)
+        m = geometry.inside_box(place.then_scale(s).apply(V), F, lo, hi)
+        if m.sum() < 100:
+            raise UsageError("--box leaves almost nothing of the model; check the numbers against the report")
+        V, F, C = geometry.compact(V, F, m, C)
+        place = geometry.place(V, up, first_cam)
+        if _scale_requested(o) and o.points is None:
+            s, scale_info = _scale(o, place.apply(V))
+    if _scale_requested(o):
+        place = place.then_scale(s)
+        out = place.apply(V)
+        geometry.check_real_size(out.max(0) - out.min(0))
+    return place, scale_info, V, F, C
+
+
+def _clear_previous(out: str, name: str) -> None:
+    """A refused run must not leave an earlier model or report in a reused output folder."""
+    from . import ar
+    for p in (os.path.join(out, "report.html"), os.path.join(out, f"{name}.glb"),
+              os.path.join(out, "work", "before.npz"), os.path.join(out, "work", "colmap.db"),
+              os.path.join(out, "work", "pairs.txt")):
+        if os.path.lexists(p) and (os.path.islink(p) or os.path.isfile(p)):
+            os.unlink(p)
+    sparse = os.path.join(out, "work", "sparse")
+    if os.path.isdir(sparse) and not os.path.islink(sparse):
+        shutil.rmtree(sparse, ignore_errors=True)
+    ar.remove_pair(out, name)
 
 
 def _dense(model, image_dir, o: Options, up, log):

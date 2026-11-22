@@ -73,8 +73,13 @@ def test_people_in_the_frames_stop_the_run_and_frames_are_deleted(tmp):
         img = textured(720, 1280, seed=i)
         img[150:500, 400 + 20 * (i % 5):750 + 20 * (i % 5)] = drawn_face(350)
         cv2.imwrite(os.path.join(src, f"{i:02d}.jpg"), img)
-    out = os.path.join(tmp, "out")
+    out = os.path.join(tmp, "out"); os.makedirs(os.path.join(out, "ar"))
+    # an earlier run's outputs in a reused folder must not survive a refusal
+    for stale in ("report.html", "people.glb", os.path.join("ar", "people.usdz")):
+        open(os.path.join(out, stale), "w").write("old")
     assert main(["run", src, "--out", out]) == 4
+    for stale in ("report.html", "people.glb", os.path.join("ar", "people.usdz")):
+        assert not os.path.exists(os.path.join(out, stale))
     rep = json.load(open(os.path.join(out, "report.json")))
     assert rep["refused"] == "faces" and rep["faces"]["verdict"] == "refused"
     assert not os.path.exists(os.path.join(out, "work", "images"))
@@ -129,3 +134,56 @@ def test_version_flag():
     with pytest.raises(SystemExit) as e:
         main(["--version"])
     assert e.value.code == 0
+
+
+@pytest.mark.pipeline
+def test_scale_without_usdz_removes_a_stale_ar_pair(run_out, tmp_path):
+    out = str(tmp_path / "copy")
+    shutil.copytree(run_out, out)
+    os.makedirs(os.path.join(out, "ar"), exist_ok=True)
+    for ext in ("glb", "usdz"):
+        open(os.path.join(out, "ar", f"jug.{ext}"), "w").write("old size")
+    rep = json.load(open(os.path.join(out, "report.json")))
+    rep["usdz"] = {"usdz": "ar/jug.usdz", "glb": "ar/jug.glb"}
+    json.dump(rep, open(os.path.join(out, "report.json"), "w"))
+    assert main(["scale", out, "--height", "0.15"]) == 0
+    assert not os.path.exists(os.path.join(out, "ar", "jug.usdz"))
+    assert "usdz" not in json.load(open(os.path.join(out, "report.json")))
+
+
+@pytest.mark.pipeline
+def test_video_input_and_a_failing_usdz_keep_the_model_and_report(tmp, monkeypatch, capsys):
+    import cv2
+    from test_safety import fake_ar
+    from conftest import write_video
+    frames = [cv2.cvtColor(cv2.imread(os.path.join(FRAMES, n)), cv2.COLOR_BGR2RGB) for n in sorted(os.listdir(FRAMES))]
+    video = write_video(os.path.join(tmp, "jug.mp4"), frames, fps=4)
+    fake_ar(tmp, monkeypatch, fail=True)
+    out = os.path.join(tmp, "jug-out")
+    code = main(["run", video, "--out", out, "--height", "0.2", "--triangles", "10000", "--texture", "256",
+                 "--threads", "4", "--usdz"])
+    assert code == 1
+    assert "USDZ failed" in capsys.readouterr().err
+    rep = json.load(open(os.path.join(out, "report.json")))
+    assert rep["input"]["kind"] == "video" and "error" in rep["usdz"]
+    assert os.path.isfile(os.path.join(out, "report.html")) and os.path.isfile(os.path.join(out, "jug.glb"))
+    assert rep["sfm"]["registered"] >= 0.3 * rep["sfm"]["total"]
+
+
+def test_too_few_cameras_placed_is_a_failure(tmp, monkeypatch):
+    from scan_studio import pipeline, sfm
+    def few(image_dir, names, work, **kw):
+        V = [sfm.View(n, np.eye(3), np.zeros(4), np.eye(3), np.zeros(3), 640, 360) for n in names[:3]]
+        return sfm.SparseModel(V, np.zeros((5, 3)), np.zeros((5, 3), np.uint8), [[0]] * 5, 0.5, 3, len(names))
+    monkeypatch.setattr(pipeline.sfm, "run", few)
+    assert main(["run", FRAMES, "--out", os.path.join(tmp, "o")]) == 1
+
+
+def test_launcher_reports_a_killed_process(tmp):
+    fake = os.path.join(tmp, "python")
+    open(fake, "w").write("#!/bin/sh\nkill -9 $$\n")
+    os.chmod(fake, 0o755)
+    proc = subprocess.run([os.path.join(ROOT, "scan-studio"), "env"], capture_output=True, text=True,
+                          env={**os.environ, "SCAN_STUDIO_PYTHON": fake})
+    assert proc.returncode == 137
+    assert "killed by signal 9" in proc.stderr and "out of memory" in proc.stderr

@@ -286,3 +286,54 @@ def test_glb_validate_turns_wrong_types_into_scan_errors():
 def test_evaluate_refuses_a_bad_camera_file(tmp):
     from scan_studio.cli import main
     assert main(["evaluate", tmp, "--truth", "x.ply", "--cameras", "y.json"]) == 2
+
+
+def fake_ar(tmp, monkeypatch, fail=False):
+    skill = os.path.join(tmp, "skill"); os.makedirs(skill, exist_ok=True)
+    exe = os.path.join(skill, "ar")
+    body = 'echo "conversion failed" >&2; exit 3\n' if fail else \
+        'out=$4; name=$6\nprintf usdz > "$out/$name.usdz"; printf glb > "$out/$name.glb"; echo \'{"name":"x"}\'\n'
+    open(exe, "w").write("#!/bin/sh\n# fake ar-models\n" + body)
+    os.chmod(exe, 0o755)
+    monkeypatch.setenv("SCAN_STUDIO_AR_MODELS", skill)
+
+
+@pytest.mark.parametrize("planted", ["jug.usdz", "jug.glb"])
+def test_ar_pair_never_written_through_planted_symlinks(tmp, monkeypatch, planted):
+    fake_ar(tmp, monkeypatch)
+    out = os.path.join(tmp, "out"); os.makedirs(os.path.join(out, "ar"))
+    victim = os.path.join(tmp, "victim.txt"); open(victim, "w").write("keep")
+    os.symlink(victim, os.path.join(out, "ar", planted))
+    with pytest.raises(ScanError, match="symbolic link"):
+        ar.convert(os.path.join(out, "jug.glb"), out, "jug", height=0.2, log=lambda *_: None)
+    assert open(victim).read() == "keep"
+    assert not [n for n in os.listdir(out) if n.startswith(".ar-")]      # private folder cleaned up
+
+
+def test_ar_writes_through_a_private_folder(tmp, monkeypatch):
+    fake_ar(tmp, monkeypatch)
+    out = os.path.join(tmp, "out"); os.mkdir(out)
+    ar.convert(os.path.join(out, "jug.glb"), out, "jug", height=0.2, log=lambda *_: None)
+    assert sorted(os.listdir(os.path.join(out, "ar"))) == ["jug.glb", "jug.usdz"]
+    assert not [n for n in os.listdir(out) if n.startswith(".ar-")]
+
+
+def test_remove_pair_unlinks_links_not_targets(tmp):
+    os.makedirs(os.path.join(tmp, "ar"))
+    victim = os.path.join(tmp, "victim.txt"); open(victim, "w").write("keep")
+    os.symlink(victim, os.path.join(tmp, "ar", "jug.usdz"))
+    open(os.path.join(tmp, "ar", "jug.glb"), "w").write("x")
+    assert sorted(ar.remove_pair(tmp, "jug")) == ["ar/jug.glb", "ar/jug.usdz"]
+    assert open(victim).read() == "keep"
+
+
+def test_report_lede_escapes_everything():
+    rep = fake_report(file="<b>x</b>.mp4")
+    rep["sfm"]["registered"] = "<i>9</i>"
+    assert "<i>" not in report.lede(rep) and "&lt;i&gt;" in report.lede(rep)
+
+
+def test_report_carries_the_font_licence():
+    page = render(fake_report())
+    assert "SIL OPEN FONT LICENSE Version 1.1" in page and "Instrument Serif Project Authors" in page
+    assert "Permission is hereby granted" in page            # three.js MIT text

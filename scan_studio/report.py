@@ -60,7 +60,7 @@ def lede(rep: dict) -> str:
     src = rep.get("input", {})
     kind = "video" if src.get("kind") == "video" else "photo set"
     return (f"A 3D model made from a {kind}, {esc(src.get('file', ''))}, on a CPU: "
-            f"{len(rep['frames']['chosen'])} frames, {rep['sfm']['registered']} cameras placed.")
+            f"{esc(len(rep['frames']['chosen']))} frames, {esc(rep['sfm']['registered'])} cameras placed.")
 
 
 def meta(rep: dict) -> str:
@@ -76,7 +76,8 @@ def render(rep: dict, glb_bytes: bytes, before: dict) -> str:
     data = {"report": rep, "glb": base64.b64encode(glb_bytes).decode("ascii"),
             "before": {"points": base64.b64encode(np.asarray(before["points"], np.float32).tobytes()).decode("ascii"),
                        "colors": base64.b64encode(np.asarray(before["colors"], np.uint8).tobytes()).decode("ascii")}}
-    css = (_read("report.css")
+    ofl = _read("OFL.txt").replace("*/", "* /")
+    css = ("/*! Fonts embedded below: Instrument Serif and JetBrains Mono, licence:\n\n" + ofl + "\n*/\n" + _read("report.css")
            .replace("__SERIF__", base64.b64encode(_read("InstrumentSerif-Regular.ttf", "rb")).decode("ascii"))
            .replace("__MONO__", base64.b64encode(_read("JetBrainsMono.ttf", "rb")).decode("ascii")))
     js = _read("viewer.bundle.js").replace("</script", "<\\/script")

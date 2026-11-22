@@ -16,6 +16,26 @@ from .errors import ScanError
 from .safeio import write_text
 
 
+MAPPER_SEEDS = (7, 1013, 40427)   # COLMAP's start is randomised and multithreaded; retry from other starts
+GOOD_SHARE = 0.6                   # stop retrying once this share of the frames has a camera
+
+
+def map_with_retries(map_once, n_images: int, log=print, seeds=MAPPER_SEEDS, good_share=GOOD_SHARE):
+    """Run the mapper from up to len(seeds) random starts; keep the reconstruction with the most cameras and
+    stop as soon as one places `good_share` of the frames. A bad start (two cameras, then nothing) happens
+    now and then with COLMAP's randomised, multithreaded initialisation."""
+    best = None
+    for attempt, seed in enumerate(seeds):
+        rec = map_once(attempt, seed)
+        if rec is not None and (best is None or rec.num_reg_images() > best.num_reg_images()):
+            best = rec
+        if best is not None and best.num_reg_images() >= good_share * n_images:
+            break
+        log(f"  mapping attempt {attempt + 1} placed {best.num_reg_images() if best else 0} of {n_images} cameras; "
+            "trying again from another start")
+    return best
+
+
 def pair_list(n: int, *, overlap: int = 12, stride: int = 4, ordered: bool = True) -> list[tuple[int, int]]:
     """Image pairs to match. For a video (ordered): each frame against the next `overlap` frames, plus every
     `stride`-th frame against every other `stride`-th frame (loop closure). For an unordered photo set: all pairs."""
@@ -98,7 +118,7 @@ def run(image_dir: str, names: list[str], work: str, *, ordered: bool, threads: 
     except ImportError:
         raise ScanError("pycolmap is not installed: run check_env.sh for the install line") from None
     try:
-        pycolmap.logging.minloglevel = 2   # errors only; the stages print their own summary
+        pycolmap.logging.minloglevel = int(os.environ.get("SCAN_STUDIO_COLMAP_LOG", "2"))   # errors only; the stages print their own summary
     except AttributeError:
         pass
     db = os.path.join(work, "colmap.db")
@@ -128,19 +148,26 @@ def run(image_dir: str, names: list[str], work: str, *, ordered: bool, threads: 
     imported.match_list_path = pairs_path
     log(f"  matching: {len(pairs)} pairs")
     pycolmap.match_image_pairs(db, matching_options=match, pairing_options=imported, device=pycolmap.Device.cpu)
-    opts = pycolmap.IncrementalPipelineOptions()
-    opts.num_threads = threads
-    opts.ba_use_gpu = False
-    opts.multiple_models = False
-    opts.random_seed = 7
     # pycolmap writes into a fresh private folder; the finished model is then moved to work/sparse
     tmp = tempfile.mkdtemp(dir=work, prefix=".sfm-")
     log("  mapping: incremental structure from motion")
-    recs = pycolmap.incremental_mapping(db, image_dir, tmp, options=opts)
-    if not recs:
+    def map_once(attempt: int, seed: int):
+        opts = pycolmap.IncrementalPipelineOptions()
+        opts.num_threads = threads
+        opts.ba_use_gpu = False
+        opts.multiple_models = True      # a failed start does not end the run: the mapper starts again elsewhere
+        opts.max_num_models = 4
+        opts.random_seed = seed
+        sub = os.path.join(tmp, f"try{attempt}")
+        os.mkdir(sub)
+        recs = pycolmap.incremental_mapping(db, image_dir, sub, options=opts)
+        return max(recs.values(), key=lambda r: r.num_reg_images()) if recs else None
+
+    rec = map_with_retries(map_once, len(names), log)
+    if rec is None:
+        shutil.rmtree(tmp, ignore_errors=True)
         raise ScanError("structure from motion placed no cameras: the frames share too few features "
                         "(plain or shiny object, too much blur, or the camera moved too fast)")
-    rec = max(recs.values(), key=lambda r: r.num_reg_images())
     final = os.path.join(tmp, "model")
     os.mkdir(final)
     rec.write_text(final)  # cameras.txt / images.txt / points3D.txt, readable by other tools (e.g. splat trainers)

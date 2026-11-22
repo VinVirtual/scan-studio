@@ -8,7 +8,7 @@
 | `scan_studio/viewer/InstrumentSerif-Regular.ttf` | display serif of the report | SIL Open Font License 1.1 (full text in `scan_studio/viewer/OFL.txt`) | github.com/google/fonts, `ofl/instrumentserif` |
 | `scan_studio/viewer/JetBrainsMono.ttf` | monospace of the report | SIL Open Font License 1.1 (full text in `scan_studio/viewer/OFL.txt`) | github.com/google/fonts, `ofl/jetbrainsmono` |
 
-The report embeds the bundle and both fonts, so every report carries the three.js licence (in the script) and names the font licence in its footer.
+The report embeds the bundle and both fonts, so every report carries the full three.js licence (in the script) and the full SIL Open Font License with the fonts' copyright lines (in the style sheet).
 
 ## Made for this repository
 
@@ -18,4 +18,4 @@ The report embeds the bundle and both fonts, so every report carries the three.j
 
 ## Installed by pip, not included
 
-pycolmap (BSD-3-Clause, COLMAP), Open3D (MIT), OpenCV `opencv-python-headless` (Apache-2.0; its Haar face models are under the Intel open-source licence shipped with it), NumPy and SciPy (BSD-3-Clause), Pillow (MIT-CMU), trimesh (MIT), xatlas-python (MIT), imageio-ffmpeg (BSD-2-Clause; the ffmpeg binary it downloads is LGPL/GPL, used as a separate program).
+pycolmap (BSD-3-Clause, COLMAP), Open3D (MIT), OpenCV `opencv-python-headless` (Apache-2.0; its Haar face models are under the Intel open-source licence shipped with it), NumPy and SciPy (BSD-3-Clause), Pillow (MIT-CMU), trimesh (MIT), xatlas-python (MIT), imageio-ffmpeg (BSD-2-Clause; its wheel ships an ffmpeg binary under ffmpeg's own LGPL/GPL licence, which scan-studio runs as a separate program).
